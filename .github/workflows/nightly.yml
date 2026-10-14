@@ -1,0 +1,78 @@
+# ================================================================
+# nightly.yml
+# ----------------------------------------------------------------
+# PURPOSE : Run job/runNightly.js every day at 8:00 PM India time, plus a
+#           manual "Run workflow" button (Actions tab) with a dry-run option.
+#
+# SETTINGS (repo -> Settings -> Secrets and variables -> Actions):
+#   Secrets   : CLIENT_SECRET
+#   Variables : TENANT_ID, CLIENT_ID, SENDER_MAILBOX, CONFIG_SITE_HOST,
+#               CONFIG_SITE_PATH, CONFIG_FOLDER, ALERT_EMAIL, TEST_RECIPIENT,
+#               GLOBAL_TEST_MODE
+#   (meaning of each: job/config.js)
+#
+# CHANGE LOG
+# - 2026-10-14 : Initial version.
+#     * cron "30 14 * * *" = 14:30 UTC = 20:00 IST. GitHub runs scheduled
+#       jobs on a best-effort basis: usually a few minutes late, sometimes
+#       15-30+ minutes when GitHub is busy (known limit of the test setup;
+#       moving to netcup later removes it).
+#     * KNOWN GITHUB RULE: scheduled workflows in a PUBLIC repo are paused
+#       automatically after 60 days without any commit. GitHub emails the
+#       owner before that; re-enable it in the Actions tab (or push any
+#       commit).
+#     * concurrency: a manual run while the 8 PM run is going waits instead
+#       of running in parallel (two runs would race on sentlog.json).
+#     * permissions: contents read only - the job needs nothing from GitHub
+#       itself; all its access is Microsoft 365 via the app secret.
+#     * npm ci (exact versions from package-lock.json), Node 22 LTS.
+# ================================================================
+
+name: Nightly tracker reminders
+
+on:
+  schedule:
+    - cron: "30 14 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (decide and print only - send nothing, write nothing)"
+        type: boolean
+        default: true
+
+concurrency:
+  group: nightly-tracker-reminders
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Send reminders
+        run: node job/runNightly.js
+        env:
+          TENANT_ID: ${{ vars.TENANT_ID }}
+          CLIENT_ID: ${{ vars.CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.CLIENT_SECRET }}
+          SENDER_MAILBOX: ${{ vars.SENDER_MAILBOX }}
+          CONFIG_SITE_HOST: ${{ vars.CONFIG_SITE_HOST }}
+          CONFIG_SITE_PATH: ${{ vars.CONFIG_SITE_PATH }}
+          CONFIG_FOLDER: ${{ vars.CONFIG_FOLDER }}
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+          TEST_RECIPIENT: ${{ vars.TEST_RECIPIENT }}
+          GLOBAL_TEST_MODE: ${{ vars.GLOBAL_TEST_MODE }}
+          # Scheduled runs: inputs is empty -> "false" (real run). Manual runs: the checkbox.
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}

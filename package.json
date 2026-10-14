@@ -1,0 +1,34 @@
+{
+  "name": "mirage-tracker-reminder",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mirage AEC Tracker Reminder - emails each person their drawings due today (8 PM IST) from any registered project tracker on SharePoint. Logic ported 1:1 from Excel_Notify.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "parity": "node tools/parityCheck.js",
+    "job": "node --env-file=.env job/runNightly.js"
+  },
+  "dependencies": {
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "//": [
+    "CHANGE LOG",
+    "- 2026-10-13 : Initial version.",
+    "  * xlsx (SheetJS) is installed from SheetJS's own CDN, NOT the npm registry.",
+    "    WHY: the npm registry copy stopped at 0.18.5, which has known security",
+    "    advisories; SheetJS publishes fixed versions only on cdn.sheetjs.com.",
+    "  * engines node>=20: GitHub Actions' current Node LTS; fetch() built in.",
+    "- 2026-10-13 : ADDED \"type\": \"module\".",
+    "  * WHY: core/*.js must run unchanged in the browser (admin page,",
+    "    <script type=module>, no build step) AND in Node (nightly job).",
+    "    Both understand ES modules (import/export); only Node understands",
+    "    require(). Without this flag Node would reject the import syntax.",
+    "- 2026-10-14 : ADDED script \"job\" = run the nightly job locally with",
+    "  settings from .env (see .env.example). DRY_RUN / GLOBAL_TEST_MODE in .env",
+    "  decide whether anything is really sent."
+  ]
+}

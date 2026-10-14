@@ -1,0 +1,46 @@
+# ================================================================
+# .gitignore
+# ----------------------------------------------------------------
+# PURPOSE : Keep things that must NEVER reach the PUBLIC GitHub repo out of it.
+#
+# CHANGE LOG
+# - 2026-10-13 : Initial version.
+#     * .env / *.secret : the Job app's client secret lives ONLY in GitHub
+#       Secrets (and a local .env for testing) - never in the repo.
+#     * *.xlsx / *.xls / samples/ : real trackers contain staff names and
+#       project data; a public repo must not hold them.
+#     * node_modules : installed from package.json, never committed.
+# - 2026-10-14 : ADDED "!.env.example" - the ".env.*" rule also blocked the
+#       settings TEMPLATE (no secret in it), which belongs in the repo.
+#     * ADDED config-samples/ - it holds real staff email addresses
+#       (trackers.json for the test tracker); the repo is PUBLIC.
+#     * ADDED .vs/ - Visual Studio's local cache / settings folder.
+# ================================================================
+
+# Dependencies
+node_modules/
+
+# Secrets - NEVER commit
+.env
+.env.*
+*.secret
+*.pfx
+*.pem
+!.env.example
+
+# Real tracker files / test data (staff names, project data)
+*.xlsx
+*.xlsm
+*.xls
+samples/
+config-samples/
+
+# Output of local test runs
+out/
+*.log
+
+# Editor / OS
+.vscode/
+.vs/
+.DS_Store
+Thumbs.db

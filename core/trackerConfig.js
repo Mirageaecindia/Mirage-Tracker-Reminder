@@ -1,0 +1,159 @@
+// ================================================================
+// trackerConfig.js
+// ----------------------------------------------------------------
+// PURPOSE : The format of trackers.json (the list of registered trackers)
+//           and its validation. Pure data rules (SRP); reading / writing the
+//           file in SharePoint is the job's / web page's I/O code.
+//           Replaces Excel_Notify's per-PC SheetSetupStore: the setup is now
+//           shared, because the nightly job must see what the lead chose.
+//
+// FILE    : Automation site -> Documents -> Application_Files ->
+//           TrackerReminder -> trackers.json
+//   {
+//     "version": 1,
+//     "trackers": [ {
+//       "id": "test-mep",                       // stable, a-z 0-9 -
+//       "name": "TEST Tracker - MEP",           // shown in emails
+//       "enabled": true,
+//       "testMode": true,                       // all mail -> testRecipient
+//       "testRecipient": "you@mirageaec.com",
+//       "siteHost": "mirageace.sharepoint.com",
+//       "sitePath": "/sites/Automation",
+//       "filePath": "Application_Files/TrackerReminder/test/TEST Tracker - MEP.xlsx",
+//       "lead": { "name": "...", "email": "...@mirageaec.com" },
+//       "senderMode": "default" | "onBehalf",
+//       "onBehalfOf": { "name": "...", "email": "..." } | null,
+//       "backlogPolicy": "afterRegistration" | "emailOnce" | "leadSummaryOnly",
+//       "registeredOn": "2026-10-14",
+//       "sheets": [ { "name": "F-14",
+//                     "roles": { "Engineers": "Engineering Inputs",
+//                                "Modelers": "Modeller With Coordination" } } ]
+//     } ]
+//   }
+//   filePath is relative to the site's DEFAULT document library
+//   ("Documents" / "Shared Documents").
+//
+// CHANGE LOG
+// - 2026-10-14 : Initial version.
+//     * Roles are saved by enum NAME and blocks by column TITLE - same
+//       choices as Excel_Notify's SheetSetup (title survives inserted
+//       columns; a vanished title becomes a warning, not a wrong column).
+//     * A tracker with ANY validation problem is skipped and the problem is
+//       reported - never half-run with guessed settings.
+//     * testMode defaults to TRUE when missing (safe side).
+//     * parseSharePointUrl(): turns the link the lead pastes into
+//       siteHost / sitePath / filePath. Only the default library
+//       ("Shared Documents") is supported for now - anything else is
+//       rejected with a clear message.
+// ================================================================
+
+import { roleFromName } from './roles.js';
+import { SheetSetup } from './assignmentItem.js';
+import { isAllowedAddress } from './recipientResolver.js';
+import { BacklogPolicy } from './recipientBuilder.js';
+import { SenderMode } from './emailComposer.js';
+
+const ID = /^[a-z0-9][a-z0-9-]{1,40}$/;
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Parsed trackers.json -> valid trackers + problems.
+ * @returns {{trackers: object[], problems: string[]}}
+ */
+export function parseTrackersFile(data) {
+  const result = { trackers: [], problems: [] };
+  if (!data || !Array.isArray(data.trackers)) {
+    result.problems.push('trackers.json is missing or has no "trackers" list.');
+    return result;
+  }
+  const seen = new Set();
+  data.trackers.forEach((raw, index) => {
+    const t = withDefaults(raw);
+    const problems = validateTracker(t);
+    if (t.id && seen.has(t.id)) problems.push(`duplicate id "${t.id}"`);
+    seen.add(t.id);
+    if (problems.length) result.problems.push(`Tracker #${index + 1} (${t.name || t.id || 'no name'}) skipped: ${problems.join('; ')}.`);
+    else result.trackers.push(t);
+  });
+  return result;
+}
+
+/** Missing optional fields -> safe defaults (see change log). */
+export function withDefaults(raw) {
+  const t = { ...(raw || {}) };
+  t.enabled = t.enabled !== false;
+  t.testMode = t.testMode !== false;
+  t.senderMode = t.senderMode || SenderMode.Default;
+  t.backlogPolicy = t.backlogPolicy || BacklogPolicy.AfterRegistration;
+  t.onBehalfOf = t.onBehalfOf || null;
+  t.sheets = Array.isArray(t.sheets) ? t.sheets : [];
+  return t;
+}
+
+/** List of problems; empty = valid. */
+export function validateTracker(t) {
+  const p = [];
+  if (!ID.test(t.id || '')) p.push('id must be 2-41 chars a-z 0-9 -');
+  if (!String(t.name || '').trim()) p.push('name missing');
+  if (!/^[a-z0-9.-]+\.sharepoint\.com$/i.test(t.siteHost || '')) p.push('siteHost must be <tenant>.sharepoint.com');
+  if (!/^\/(sites|teams)\/[^/]+$/i.test(t.sitePath || '')) p.push('sitePath must look like /sites/Name');
+  if (!/\.xls[xm]$/i.test(t.filePath || '')) p.push('filePath must point to an .xlsx / .xlsm file');
+  if (!t.lead || !isAllowedAddress(t.lead.email)) p.push('lead.email must be a @mirageaec.com address');
+  if (t.testMode && !isAllowedAddress(t.testRecipient)) p.push('testRecipient must be a @mirageaec.com address while testMode is on');
+  if (!Object.values(SenderMode).includes(t.senderMode)) p.push(`senderMode must be ${Object.values(SenderMode).join(' / ')}`);
+  if (t.senderMode === SenderMode.OnBehalf && (!t.onBehalfOf || !isAllowedAddress(t.onBehalfOf.email))) {
+    p.push('onBehalfOf.email must be a @mirageaec.com address in On-behalf mode');
+  }
+  if (!Object.values(BacklogPolicy).includes(t.backlogPolicy)) p.push(`backlogPolicy must be ${Object.values(BacklogPolicy).join(' / ')}`);
+  if (!ISO_DATE.test(t.registeredOn || '')) p.push('registeredOn must be YYYY-MM-DD');
+  if (t.sheets.length === 0) p.push('no sheets configured');
+  t.sheets.forEach((s) => {
+    if (!s || !String(s.name || '').trim()) p.push('a sheet has no name');
+    else if (!s.roles || Object.keys(s.roles).length === 0) p.push(`sheet "${s.name}" has no roles`);
+    else {
+      for (const roleName of Object.keys(s.roles)) {
+        if (roleFromName(roleName) === undefined) p.push(`sheet "${s.name}": unknown role "${roleName}"`);
+        if (!String(s.roles[roleName] || '').trim()) p.push(`sheet "${s.name}": role "${roleName}" has no column title`);
+      }
+    }
+  });
+  return p;
+}
+
+/** Tracker config -> SheetSetups for trackerReader (role names -> role ids). */
+export function toSheetSetups(tracker) {
+  return tracker.sheets.map((s) => {
+    const setup = new SheetSetup(s.name);
+    for (const [roleName, title] of Object.entries(s.roles)) {
+      const role = roleFromName(roleName);
+      if (role === undefined) continue; // already reported by validateTracker
+      setup.roles.add(role);
+      setup.blockTitles.set(role, title);
+    }
+    return setup;
+  });
+}
+
+/**
+ * "https://mirageace.sharepoint.com/sites/X/Shared%20Documents/General/a.xlsx?web=1"
+ *   -> { siteHost, sitePath: "/sites/X", filePath: "General/a.xlsx" }
+ * Throws with a readable message for anything else (see change log).
+ */
+export function parseSharePointUrl(url) {
+  let u;
+  try {
+    u = new URL(String(url).trim());
+  } catch {
+    throw new Error('Not a valid link.');
+  }
+  if (!/\.sharepoint\.com$/i.test(u.hostname)) throw new Error('Not a SharePoint link.');
+  if (/-my\.sharepoint\.com$/i.test(u.hostname)) {
+    throw new Error('This file is in someone\'s OneDrive. Move it to a team site first (it would break when that person leaves).');
+  }
+  const parts = decodeURIComponent(u.pathname).split('/').filter(Boolean); // ["sites","X","Shared Documents",...]
+  if (parts.length < 4 || !/^(sites|teams)$/i.test(parts[0])) throw new Error('Link does not point to a file in a team site.');
+  if (parts[2].toLowerCase() !== 'shared documents') {
+    throw new Error(`Only the site's main "Documents" library is supported (this link is in "${parts[2]}").`);
+  }
+  return { siteHost: u.hostname, sitePath: `/${parts[0]}/${parts[1]}`, filePath: parts.slice(3).join('/') };
+}
