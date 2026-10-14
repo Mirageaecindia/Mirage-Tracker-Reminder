@@ -1,0 +1,36 @@
+{
+  "name": "mirage-tracker-reminder-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Admin web page for Mirage Tracker Reminder: register trackers, confirm columns, send times, name matching, preview, admins. Uses the same ../core logic as the nightly job.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@azure/msal-browser": "^3.26.1",
+    "@azure/msal-react": "^2.1.1",
+    "@fluentui/react-components": "^9.54.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.3",
+    "vite": "^5.4.10"
+  },
+  "//": [
+    "CHANGE LOG",
+    "- 2026-10-14 : Initial version (user decisions 2026-10-14: React, Microsoft",
+    "  Fluent UI look with Mirage colours, screens Trackers / Name matching /",
+    "  Preview / Admins).",
+    "  * Separate package.json from the job (root): the job must not install",
+    "    React, and the page must not install the job's server-only code.",
+    "  * @azure/msal-browser + @azure/msal-react = Microsoft's official sign-in",
+    "    library for single-page apps (the 'Admin' app registration is SPA).",
+    "  * xlsx from the SheetJS CDN, same version as the job (0.20.3), so the",
+    "    page reads trackers exactly like the job."
+  ]
+}

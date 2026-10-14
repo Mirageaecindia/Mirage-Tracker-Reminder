@@ -15,6 +15,8 @@
 #     * ADDED config-samples/ - it holds real staff email addresses
 #       (trackers.json for the test tracker); the repo is PUBLIC.
 #     * ADDED .vs/ - Visual Studio's local cache / settings folder.
+# - 2026-10-14 : ADDED web/dist/ - the built admin page is produced by the
+#       "Publish admin page" workflow on GitHub, never committed.
 # ================================================================
 
 # Dependencies
@@ -37,6 +39,7 @@ config-samples/
 
 # Output of local test runs
 out/
+web/dist/
 *.log
 
 # Editor / OS

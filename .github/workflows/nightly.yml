@@ -42,13 +42,20 @@
 #     * Cost: none - public repos have unlimited free Actions minutes.
 #     * Manual button: new "Ignore send time" tick-box (default ticked) =
 #       run every tracker now, like before.
+# - 2026-10-14 : cron "0,30 * * * *" -> "7,37 * * * *".
+#     * WHY: on 14-10 the 2:00 PM test produced no scheduled run for 45+
+#       minutes. :00 / :30 are GitHub's busiest minutes; scheduled runs there
+#       are delayed or DROPPED under load (GitHub's own docs advise avoiding
+#       the start of the hour).
+#     * UTC :07 / :37 = IST :37 / :07, so every half hour of India time is
+#       still covered; a tracker set to 8:00 PM now sends at ~8:07 PM.
 # ================================================================
 
 name: Nightly tracker reminders
 
 on:
   schedule:
-    - cron: "0,30 * * * *"
+    - cron: "7,37 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
