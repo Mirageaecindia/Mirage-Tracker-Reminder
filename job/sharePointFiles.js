@@ -24,6 +24,11 @@
 //     * readJson: missing file -> null (first run has no sentlog.json yet);
 //       a file that is not valid JSON -> error (never silently "empty",
 //       which could re-send every overdue reminder).
+// - 2026-10-14 : Bad JSON error now says WHERE ("line 9, column 21: ...").
+//     * WHY: on 14-10 a hand edit broke trackers.json in SharePoint and the
+//       message only said "not valid JSON" - the person fixing it had to
+//       hunt for the mistake. The line/column is taken from JSON.parse's own
+//       message, or computed from its "position N" when Node does not give it.
 // ================================================================
 
 import { GraphError } from './graphClient.js';
@@ -93,6 +98,17 @@ export class SharePointFiles {
     const body = Buffer.from(JSON.stringify(data, null, 2), 'utf8');
     await this.graph.putBytes(`sites/${id}/drive/root:/${encodePath(filePath)}:/content`, body, 'application/json');
   }
+}
+
+/** JSON.parse message -> "line 9, column 21: Expected ',' ..." (see change log 2026-10-14). */
+function whereInJson(message, text) {
+  const reason = message.replace(/\s*in JSON at position \d+.*$/s, '').trim();
+  const lineCol = /line (\d+) column (\d+)/.exec(message);
+  if (lineCol) return `line ${lineCol[1]}, column ${lineCol[2]}: ${reason}`;
+  const pos = /position (\d+)/.exec(message);
+  if (!pos) return message;
+  const before = text.slice(0, Number(pos[1])).split('\n');
+  return `line ${before.length}, column ${before[before.length - 1].length + 1}: ${reason}`;
 }
 
 /** "General/BIM LEADS/a b.xlsx" -> "General/BIM%20LEADS/a%20b.xlsx" */

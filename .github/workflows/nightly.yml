@@ -26,6 +26,11 @@
 #     * permissions: contents read only - the job needs nothing from GitHub
 #       itself; all its access is Microsoft 365 via the app secret.
 #     * npm ci (exact versions from package-lock.json), Node 22 LTS.
+# - 2026-10-14 : actions/checkout v4 -> v5, actions/setup-node v4 -> v5,
+#       node-version 22 -> 24.
+#     * WHY: run #1/#2 warned "Node.js 20 is deprecated" - the v4 actions run
+#       on Node 20; v5 runs on Node 24. Node 24 for the job too = same major
+#       version as the PC it is tested on (v24.21).
 # ================================================================
 
 name: Nightly tracker reminders
@@ -52,11 +57,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci
