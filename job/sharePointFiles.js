@@ -29,6 +29,8 @@
 //       message only said "not valid JSON" - the person fixing it had to
 //       hunt for the mistake. The line/column is taken from JSON.parse's own
 //       message, or computed from its "position N" when Node does not give it.
+// - 2026-10-14 : ADDED runstate.json to CONFIG_FILES (per-tracker "already
+//       ran today" + alert throttle - see core/schedule.js).
 // ================================================================
 
 import { GraphError } from './graphClient.js';
@@ -37,6 +39,7 @@ export const CONFIG_FILES = Object.freeze({
   trackers: 'trackers.json',
   nameMap: 'name_map.json',
   sentLog: 'sentlog.json',
+  runState: 'runstate.json',
 });
 
 export class SharePointFiles {
@@ -85,10 +88,11 @@ export class SharePointFiles {
       if (/^File not found/.test(e.message)) return null;
       throw e;
     }
+    const text = bytes.toString('utf8').replace(/^\uFEFF/, ''); // tolerate a BOM from Notepad
     try {
-      return JSON.parse(bytes.toString('utf8').replace(/^﻿/, '')); // tolerate a BOM from Notepad
-    } catch {
-      throw new Error(`${filePath} is not valid JSON - fix or delete it (see change log).`);
+      return JSON.parse(text);
+    } catch (e) {
+      throw new Error(`${filePath} is not valid JSON (${whereInJson(e.message, text)}) - fix it in VS Code or re-upload a good copy.`);
     }
   }
 

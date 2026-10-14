@@ -1,8 +1,10 @@
 # ================================================================
 # nightly.yml
 # ----------------------------------------------------------------
-# PURPOSE : Run job/runNightly.js every day at 8:00 PM India time, plus a
-#           manual "Run workflow" button (Actions tab) with a dry-run option.
+# PURPOSE : Wake job/runNightly.js every 30 minutes; the job sends each
+#           tracker at ITS send time (India time, default 8:00 PM). Plus a
+#           manual "Run workflow" button (Actions tab) with dry-run and
+#           ignore-send-time options.
 #
 # SETTINGS (repo -> Settings -> Secrets and variables -> Actions):
 #   Secrets   : CLIENT_SECRET
@@ -31,17 +33,30 @@
 #     * WHY: run #1/#2 warned "Node.js 20 is deprecated" - the v4 actions run
 #       on Node 20; v5 runs on Node 24. Node 24 for the job too = same major
 #       version as the PC it is tested on (v24.21).
+# - 2026-10-14 : Wakes EVERY 30 MINUTES instead of once at 8 PM.
+#     * WHY: user decision - each tracker has its own send time in IST
+#       (default 8 PM, 30-minute steps), set in trackers.json / admin page.
+#       The job itself decides which trackers are due (core/schedule.js) and
+#       stops within seconds when none is. "0,30 * * * *" UTC = :30 / :00 IST
+#       (India is UTC+5:30), so every half hour of India time is covered.
+#     * Cost: none - public repos have unlimited free Actions minutes.
+#     * Manual button: new "Ignore send time" tick-box (default ticked) =
+#       run every tracker now, like before.
 # ================================================================
 
 name: Nightly tracker reminders
 
 on:
   schedule:
-    - cron: "30 14 * * *"
+    - cron: "0,30 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
         description: "Dry run (decide and print only - send nothing, write nothing)"
+        type: boolean
+        default: true
+      ignore_send_time:
+        description: "Ignore send time (run every tracker now)"
         type: boolean
         default: true
 
@@ -81,3 +96,4 @@ jobs:
           GLOBAL_TEST_MODE: ${{ vars.GLOBAL_TEST_MODE }}
           # Scheduled runs: inputs is empty -> "false" (real run). Manual runs: the checkbox.
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          IGNORE_SEND_TIME: ${{ github.event_name == 'workflow_dispatch' && inputs.ignore_send_time || 'false' }}

@@ -1,22 +1,23 @@
 // ================================================================
 // job/runNightly.js
 // ----------------------------------------------------------------
-// PURPOSE : The 8 PM run. ONLY orchestrates (like Excel_Notify's
+// PURPOSE : One wake-up of the reminder job (every 30 min). ONLY orchestrates (like Excel_Notify's
 //           NotifyCommand): every decision lives in core\, every Graph call
 //           in job\*.js.
 //
 // FLOW    : 1. settings (job/config.js), app sign-in
-//           2. from the Automation site: trackers.json, name_map.json,
-//              sentlog.json; company directory from Microsoft 365
-//           3. for EACH enabled tracker (one failing never stops the others):
+//           2. trackers.json + runstate.json -> which trackers are DUE now
+//              (core/schedule.js). None due and no problem -> stop here.
+//           3. name_map.json, sentlog.json, company directory
+//           4. for EACH due tracker (one failing never stops the others):
 //                download -> snapshot -> layouts -> read (lead's setup)
 //                -> People sheet -> resolve names -> decide (due / overdue)
 //                -> send each reminder -> record in sent log
 //                -> lead summary (only when there is something to report)
-//           4. save sentlog.json once, at the end
-//           5. anything went wrong -> alert email to ALERT_EMAIL and exit
-//              code 1 (GitHub then also marks the run red and emails the
-//              repo owner - two independent warnings)
+//                then mark it "ran today" in runstate.json
+//           5. save sentlog.json + runstate.json once, at the end
+//           6. anything went wrong -> alert email to ALERT_EMAIL (once per
+//              day per problem) and exit code 1 (GitHub marks the run red)
 //
 // RUN     : GitHub Actions (.github/workflows/nightly.yml), or locally:
 //             node --env-file=.env job/runNightly.js
@@ -37,6 +38,26 @@
 //       opposite - losing reminders).
 //     * A hidden People sheet is reported (the snapshot skips hidden sheets).
 //     * The lead summary also goes to the test address in test mode.
+// - 2026-10-14 : Per-tracker SEND TIME (user decision: IST, default 8 PM,
+//       30-minute steps). The workflow now wakes every 30 minutes.
+//     * Only DUE trackers run (core/schedule.js). When nothing is due the
+//       run stops before loading the directory / sent log - a few seconds.
+//     * A tracker is marked "ran today" after its run EVEN IF it failed.
+//       WHY: otherwise a moved file would be retried - and alerted - every
+//       30 minutes until midnight. The alert says how to retry by hand.
+//     * Manual runs with IGNORE_SEND_TIME run every tracker and do NOT mark
+//       "ran today". WHY: a noon test must not cancel that day's real run
+//       (the sent log still stops duplicate reminders).
+//     * Alerts: the same problem text emails at most ONCE per India day; a
+//       repeat is only logged and the run stays green (GitHub would also
+//       email the owner about every red run - 48 times a day).
+//     * "today" now comes from schedule.indiaNow() (one place for IST maths);
+//       the local indiaToday() helper was removed.
+//     * BUG FOUND IN TEST (same day): runstate.json was read AFTER
+//       trackers.json. With a broken trackers.json the read threw first, so
+//       the run continued with an EMPTY run state: the alert was not
+//       throttled, and saving the alert mark OVERWROTE runstate.json, wiping
+//       every tracker's "ran today" record. Fix: read runstate.json first.
 // ================================================================
 
 import { readFileSync } from 'node:fs';
@@ -61,6 +82,7 @@ import { composeReminder, LOGO } from '../core/emailComposer.js';
 import { composeLeadSummary, shouldSendLeadSummary } from '../core/leadSummaryComposer.js';
 import { parseTrackersFile, toSheetSetups } from '../core/trackerConfig.js';
 import * as H from '../core/htmlBuilder.js';
+import { indiaNow, isTrackerDue, sendTimeLabel, RunState } from '../core/schedule.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -69,50 +91,80 @@ async function main() {
   const graph = new GraphClient(cfg);
   const files = new SharePointFiles(graph);
   const configPath = (name) => posix.join(cfg.configFolder, name);
-  const today = indiaToday();
+  const read = (name) => files.readJson(cfg.configSiteHost, cfg.configSitePath, configPath(name));
+  const write = (name, data) => files.writeJson(cfg.configSiteHost, cfg.configSitePath, configPath(name), data);
+  const now = indiaNow();
+  const today = now.date;
   const nowIso = new Date().toISOString();
   const problems = []; // everything that goes into the alert email
   const sender = new MailSender(graph, { senderMailbox: cfg.senderMailbox, logoBytes: readLogo(), dryRun: cfg.dryRun });
+  let runState = new RunState(null);
 
-  console.log(`Tracker Reminder run - India date ${today}${cfg.dryRun ? ' - DRY RUN' : ''}${cfg.globalTestMode ? ' - GLOBAL TEST MODE' : ''}`);
+  console.log(`Tracker Reminder wake-up - India ${today} ${now.label}`
+    + `${cfg.dryRun ? ' - DRY RUN' : ''}${cfg.globalTestMode ? ' - GLOBAL TEST MODE' : ''}${cfg.ignoreSendTime ? ' - IGNORING SEND TIMES' : ''}`);
 
   try {
-    // ---- 2. shared data ----
-    const trackersFile = await files.readJson(cfg.configSiteHost, cfg.configSitePath, configPath(CONFIG_FILES.trackers));
-    const { trackers, problems: configProblems } = parseTrackersFile(trackersFile);
+    // ---- 2. which trackers are due ----
+    // runstate FIRST: if trackers.json is broken, the alert throttle and the
+    // "ran today" records must still be known (bug found 2026-10-14 in test).
+    runState = new RunState(await read(CONFIG_FILES.runState));
+    const { trackers, problems: configProblems } = parseTrackersFile(await read(CONFIG_FILES.trackers));
     problems.push(...configProblems);
 
-    const nameMapFile = await files.readJson(cfg.configSiteHost, cfg.configSitePath, configPath(CONFIG_FILES.nameMap));
-    const { map: sharedMap, rejected } = parseNameMap(nameMapFile || []);
-    if (rejected) problems.push(`name_map.json: ${rejected} invalid entr${rejected === 1 ? 'y' : 'ies'} ignored (each needs Name + @mirageaec.com Email).`);
-
-    const sentLog = new SentLog(await files.readJson(cfg.configSiteHost, cfg.configSitePath, configPath(CONFIG_FILES.sentLog)));
-    const directory = await getCompanyDirectory(graph);
-    console.log(`Loaded ${trackers.length} tracker(s), ${sharedMap.size} mapped name(s), ${directory.length} company user(s).`);
-
-    // ---- 3. each tracker ----
-    for (const tracker of trackers.filter((t) => t.enabled)) {
-      try {
-        await runTracker({ tracker, cfg, files, sender, sentLog, sharedMap, directory, today, nowIso });
-      } catch (e) {
-        problems.push(`${tracker.name}: ${e.message}`);
-        console.error(`!! ${tracker.name}: ${e.message}`);
-      }
+    const due = [];
+    for (const t of trackers.filter((x) => x.enabled)) {
+      if (cfg.ignoreSendTime || isTrackerDue(t.sendTime, now, runState.lastRunOn(t.id))) due.push(t);
+      else console.log(`   ${t.name}: not due (sends at ${sendTimeLabel(t.sendTime)}, last ran ${runState.lastRunOn(t.id) || 'never'})`);
     }
 
-    // ---- 4. save the sent log once ----
-    const pruned = sentLog.prune(nowIso);
-    if (!cfg.dryRun) await files.writeJson(cfg.configSiteHost, cfg.configSitePath, configPath(CONFIG_FILES.sentLog), sentLog.toJSON());
-    console.log(`Sent log: ${sentLog.entries.length} record(s), ${pruned} old record(s) pruned${cfg.dryRun ? ' (not saved - dry run)' : ''}.`);
+    if (due.length > 0) {
+      // ---- 3. shared data ----
+      const { map: sharedMap, rejected } = parseNameMap((await read(CONFIG_FILES.nameMap)) || []);
+      if (rejected) problems.push(`name_map.json: ${rejected} invalid entr${rejected === 1 ? 'y' : 'ies'} ignored (each needs Name + @mirageaec.com Email).`);
+      const sentLog = new SentLog(await read(CONFIG_FILES.sentLog));
+      const directory = await getCompanyDirectory(graph);
+      console.log(`Due now: ${due.length} tracker(s). ${sharedMap.size} mapped name(s), ${directory.length} company user(s).`);
+
+      // ---- 4. each due tracker ----
+      for (const tracker of due) {
+        try {
+          await runTracker({ tracker, cfg, files, sender, sentLog, sharedMap, directory, today, nowIso });
+        } catch (e) {
+          problems.push(`${tracker.name}: ${e.message} (it runs again tomorrow; to retry today use Actions -> Run workflow)`);
+          console.error(`!! ${tracker.name}: ${e.message}`);
+        }
+        if (!cfg.ignoreSendTime && !cfg.dryRun) runState.markRun(tracker.id, today, nowIso); // see change log
+      }
+
+      // ---- 5. save the sent log once ----
+      const pruned = sentLog.prune(nowIso);
+      if (!cfg.dryRun) await write(CONFIG_FILES.sentLog, sentLog.toJSON());
+      console.log(`Sent log: ${sentLog.entries.length} record(s), ${pruned} old record(s) pruned${cfg.dryRun ? ' (not saved - dry run)' : ''}.`);
+    } else if (problems.length === 0) {
+      console.log('Nothing due now.');
+    }
   } catch (e) {
     problems.push(`Run stopped: ${e.message}`);
     console.error(`!! Run stopped: ${e.message}`);
   }
 
-  // ---- 5. alert ----
+  // ---- 6. alert (once per day per problem) ----
   if (problems.length) {
-    await sendAlert(sender, cfg, today, problems).catch((e) => console.error(`!! Alert email failed too: ${e.message}`));
-    process.exitCode = 1;
+    const key = problems.join('\n');
+    if (!cfg.ignoreSendTime && runState.alreadyAlerted(today, key)) {
+      console.log('Same problem(s) already alerted today - not emailing again.');
+    } else {
+      await sendAlert(sender, cfg, today, problems).catch((e) => console.error(`!! Alert email failed too: ${e.message}`));
+      if (!cfg.dryRun) runState.markAlerted(today, key);
+      process.exitCode = 1;
+    }
+  }
+
+  if (runState.changed && !cfg.dryRun) {
+    await write(CONFIG_FILES.runState, runState.toJSON()).catch((e) => {
+      console.error(`!! Could not save runstate.json: ${e.message}`);
+      process.exitCode = 1;
+    });
   }
 }
 
@@ -196,11 +248,6 @@ function readLogo() {
   } catch {
     return null;
   }
-}
-
-/** Today's date in India (UTC+05:30) as YYYY-MM-DD. */
-function indiaToday() {
-  return new Date(Date.now() + 5.5 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
 main().catch((e) => {

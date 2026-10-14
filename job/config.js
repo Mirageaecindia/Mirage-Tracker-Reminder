@@ -23,6 +23,8 @@
 //                      whatever trackers.json says. "false" = per tracker.
 //   TEST_RECIPIENT     where test-mode mail goes when GLOBAL_TEST_MODE forces it
 //   DRY_RUN            "true" = read + decide + print, send NOTHING, write NOTHING
+//   IGNORE_SEND_TIME   "true" = run EVERY tracker now, whatever its send time
+//                      (manual / test runs). Default "false".
 //
 // CHANGE LOG
 // - 2026-10-14 : Initial version.
@@ -32,6 +34,9 @@
 //     * GLOBAL_TEST_MODE defaults to TRUE. WHY: the safe failure is "mail
 //       went to the tester", never "mail went to the whole team by mistake".
 //       Going live is a deliberate switch of one variable.
+// - 2026-10-14 : ADDED IGNORE_SEND_TIME (per-tracker send times arrived;
+//       a manual test run must still be able to run everything at once).
+//       Default false = scheduled behaviour.
 // ================================================================
 
 const REQUIRED = [
@@ -56,5 +61,6 @@ export function loadJobConfig(env = process.env) {
     testRecipient: env.TEST_RECIPIENT.trim(),
     globalTestMode: String(env.GLOBAL_TEST_MODE ?? 'true').trim().toLowerCase() !== 'false', // default ON
     dryRun: String(env.DRY_RUN ?? 'false').trim().toLowerCase() === 'true',
+    ignoreSendTime: String(env.IGNORE_SEND_TIME ?? 'false').trim().toLowerCase() === 'true',
   });
 }

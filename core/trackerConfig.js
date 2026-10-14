@@ -25,6 +25,7 @@
 //       "onBehalfOf": { "name": "...", "email": "..." } | null,
 //       "backlogPolicy": "afterRegistration" | "emailOnce" | "leadSummaryOnly",
 //       "registeredOn": "2026-10-14",
+//       "sendTime": "20:00",                     // India time, HH:00 or HH:30
 //       "sheets": [ { "name": "F-14",
 //                     "roles": { "Engineers": "Engineering Inputs",
 //                                "Modelers": "Modeller With Coordination" } } ]
@@ -45,6 +46,10 @@
 //       siteHost / sitePath / filePath. Only the default library
 //       ("Shared Documents") is supported for now - anything else is
 //       rejected with a clear message.
+// - 2026-10-14 : ADDED sendTime (user decision: per-tracker send time in
+//       IST, default 8 PM, 30-minute steps). Missing -> "20:00"; anything
+//       other than HH:00 / HH:30 is a validation problem (see schedule.js
+//       for why only half hours).
 // ================================================================
 
 import { roleFromName } from './roles.js';
@@ -52,6 +57,7 @@ import { SheetSetup } from './assignmentItem.js';
 import { isAllowedAddress } from './recipientResolver.js';
 import { BacklogPolicy } from './recipientBuilder.js';
 import { SenderMode } from './emailComposer.js';
+import { DEFAULT_SEND_TIME, SEND_TIME } from './schedule.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -86,6 +92,7 @@ export function withDefaults(raw) {
   t.senderMode = t.senderMode || SenderMode.Default;
   t.backlogPolicy = t.backlogPolicy || BacklogPolicy.AfterRegistration;
   t.onBehalfOf = t.onBehalfOf || null;
+  t.sendTime = t.sendTime || DEFAULT_SEND_TIME;
   t.sheets = Array.isArray(t.sheets) ? t.sheets : [];
   return t;
 }
@@ -106,6 +113,7 @@ export function validateTracker(t) {
   }
   if (!Object.values(BacklogPolicy).includes(t.backlogPolicy)) p.push(`backlogPolicy must be ${Object.values(BacklogPolicy).join(' / ')}`);
   if (!ISO_DATE.test(t.registeredOn || '')) p.push('registeredOn must be YYYY-MM-DD');
+  if (!SEND_TIME.test(t.sendTime || '')) p.push('sendTime must be HH:00 or HH:30 (India time, e.g. "20:00")');
   if (t.sheets.length === 0) p.push('no sheets configured');
   t.sheets.forEach((s) => {
     if (!s || !String(s.name || '').trim()) p.push('a sheet has no name');
