@@ -23,11 +23,20 @@
 //       URL; fetch follows it and drops the Authorization header on the
 //       other host, which is what that URL expects.
 //     * The client secret is never logged, never put in an error message.
+// - 2026-10-14 : ADDED a 60-second time limit on EVERY request (token too).
+//     * WHY: GitHub run #4 hung for 6+ minutes after its first log line with
+//       no error - a request that never answered. fetch() has no time limit
+//       of its own, so the job just waited until GitHub's 15-minute kill.
+//     * A timed-out request is retried like a 503 (2 s, 4 s, 8 s); after the
+//       last attempt it fails with "Timed out after 60 s: GET <path>", which
+//       reaches the alert email instead of silence.
+//     * The limit also covers reading the response body (same signal).
 // ================================================================
 
 const GRAPH = 'https://graph.microsoft.com/v1.0/';
 const RETRY_STATUS = new Set([429, 503, 504]);
 const MAX_ATTEMPTS = 4;
+const TIMEOUT_MS = 60000; // per request, see change log
 
 export class GraphError extends Error {
   constructor(status, code, message, path) {
@@ -54,7 +63,11 @@ export class GraphClient {
       scope: 'https://graph.microsoft.com/.default',
       grant_type: 'client_credentials',
     });
-    const res = await this.fetch(`https://login.microsoftonline.com/${this.cfg.tenantId}/oauth2/v2.0/token`, { method: 'POST', body });
+    const res = await this.fetch(`https://login.microsoftonline.com/${this.cfg.tenantId}/oauth2/v2.0/token`, {
+      method: 'POST', body, signal: AbortSignal.timeout(TIMEOUT_MS),
+    }).catch((e) => {
+      throw isTimeout(e) ? new Error('Timed out after 60 s: sign-in as the job app') : e;
+    });
     const json = await res.json().catch(() => ({}));
     if (!res.ok) {
       // e.g. AADSTS7000222 = secret expired -> the alert email says exactly that
@@ -73,7 +86,17 @@ export class GraphClient {
     for (let attempt = 1; ; attempt++) {
       const headers = { Authorization: `Bearer ${await this.token()}` };
       if (contentType) headers['Content-Type'] = contentType;
-      const res = await this.fetch(url, { method, headers, body });
+      let res;
+      try {
+        res = await this.fetch(url, { method, headers, body, signal: AbortSignal.timeout(TIMEOUT_MS) });
+      } catch (e) {
+        if (!isTimeout(e)) throw e;
+        if (attempt < MAX_ATTEMPTS) {
+          await sleep(2000 * 2 ** (attempt - 1));
+          continue;
+        }
+        throw new Error(`Timed out after 60 s (${MAX_ATTEMPTS} attempts): ${method} ${path.split('?')[0]}`);
+      }
       if (res.ok) return res;
 
       if (RETRY_STATUS.has(res.status) && attempt < MAX_ATTEMPTS) {
@@ -103,6 +126,11 @@ export class GraphClient {
   async postJson(path, data) {
     await this.request('POST', path, { body: JSON.stringify(data), contentType: 'application/json' });
   }
+}
+
+/** fetch aborted by AbortSignal.timeout (name differs by Node version). */
+function isTimeout(e) {
+  return e && (e.name === 'TimeoutError' || e.name === 'AbortError');
 }
 
 function sleep(ms) {

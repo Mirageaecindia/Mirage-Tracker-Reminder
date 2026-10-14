@@ -58,6 +58,13 @@
 //       the run continued with an EMPTY run state: the alert was not
 //       throttled, and saving the alert mark OVERWROTE runstate.json, wiping
 //       every tracker's "ran today" record. Fix: read runstate.json first.
+// - 2026-10-14 : Progress lines ("   > reading trackers.json ...") before each
+//       network step. WHY: GitHub run #4 hung silently after the first log
+//       line; with these lines the log shows exactly which step it was on.
+//       (The hang itself is now cut off by graphClient's 60 s time limit.)
+//     * runstate.json is SAVED only if it was LOADED successfully. WHY (found
+//       in the timeout test): a failed read leaves an empty run state; saving
+//       that would wipe every tracker's "ran today" record.
 // ================================================================
 
 import { readFileSync } from 'node:fs';
@@ -91,14 +98,21 @@ async function main() {
   const graph = new GraphClient(cfg);
   const files = new SharePointFiles(graph);
   const configPath = (name) => posix.join(cfg.configFolder, name);
-  const read = (name) => files.readJson(cfg.configSiteHost, cfg.configSitePath, configPath(name));
-  const write = (name, data) => files.writeJson(cfg.configSiteHost, cfg.configSitePath, configPath(name), data);
+  const read = (name) => {
+    step(`reading ${name}`);
+    return files.readJson(cfg.configSiteHost, cfg.configSitePath, configPath(name));
+  };
+  const write = (name, data) => {
+    step(`saving ${name}`);
+    return files.writeJson(cfg.configSiteHost, cfg.configSitePath, configPath(name), data);
+  };
   const now = indiaNow();
   const today = now.date;
   const nowIso = new Date().toISOString();
   const problems = []; // everything that goes into the alert email
   const sender = new MailSender(graph, { senderMailbox: cfg.senderMailbox, logoBytes: readLogo(), dryRun: cfg.dryRun });
   let runState = new RunState(null);
+  let runStateLoaded = false; // see change log: never save a state we could not read
 
   console.log(`Tracker Reminder wake-up - India ${today} ${now.label}`
     + `${cfg.dryRun ? ' - DRY RUN' : ''}${cfg.globalTestMode ? ' - GLOBAL TEST MODE' : ''}${cfg.ignoreSendTime ? ' - IGNORING SEND TIMES' : ''}`);
@@ -108,6 +122,7 @@ async function main() {
     // runstate FIRST: if trackers.json is broken, the alert throttle and the
     // "ran today" records must still be known (bug found 2026-10-14 in test).
     runState = new RunState(await read(CONFIG_FILES.runState));
+    runStateLoaded = true;
     const { trackers, problems: configProblems } = parseTrackersFile(await read(CONFIG_FILES.trackers));
     problems.push(...configProblems);
 
@@ -122,6 +137,7 @@ async function main() {
       const { map: sharedMap, rejected } = parseNameMap((await read(CONFIG_FILES.nameMap)) || []);
       if (rejected) problems.push(`name_map.json: ${rejected} invalid entr${rejected === 1 ? 'y' : 'ies'} ignored (each needs Name + @mirageaec.com Email).`);
       const sentLog = new SentLog(await read(CONFIG_FILES.sentLog));
+      step('loading company users');
       const directory = await getCompanyDirectory(graph);
       console.log(`Due now: ${due.length} tracker(s). ${sharedMap.size} mapped name(s), ${directory.length} company user(s).`);
 
@@ -160,7 +176,7 @@ async function main() {
     }
   }
 
-  if (runState.changed && !cfg.dryRun) {
+  if (runState.changed && runStateLoaded && !cfg.dryRun) {
     await write(CONFIG_FILES.runState, runState.toJSON()).catch((e) => {
       console.error(`!! Could not save runstate.json: ${e.message}`);
       process.exitCode = 1;
@@ -176,6 +192,7 @@ async function runTracker({ tracker, cfg, files, sender, sentLog, sharedMap, dir
   const workbookName = posix.basename(tracker.filePath);
   console.log(`\n== ${tracker.name}${testMode ? `  [TEST -> ${testRecipient}]` : ''}`);
 
+  step(`downloading ${tracker.sitePath}/${tracker.filePath}`);
   const bytes = await files.downloadFile(tracker.siteHost, tracker.sitePath, tracker.filePath);
   const snapshot = takeSnapshot(XLSX, bytes, { name: workbookName, fullName: `${tracker.sitePath}/${tracker.filePath}` });
   const layouts = new Map(snapshot.sheets.map((s) => [s.name, detectLayout(s)]));
@@ -239,6 +256,11 @@ async function sendAlert(sender, cfg, today, problems) {
     subject: `[ALERT] Tracker Reminder - ${problems.length} problem(s) - ${H.date(today, today)}`,
     html: html.join(''), inlineImages: [],
   }, null);
+}
+
+/** Progress line before a network step (see change log). */
+function step(text) {
+  console.log(`   > ${text} ...`);
 }
 
 /** assets/mirage_logo.jpg, or null (emails then go without the logo). */
