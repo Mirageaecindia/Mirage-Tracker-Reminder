@@ -65,6 +65,13 @@
 //     * runstate.json is SAVED only if it was LOADED successfully. WHY (found
 //       in the timeout test): a failed read leaves an empty run state; saving
 //       that would wipe every tracker's "ran today" record.
+// - 2026-10-15 : Resend option, co-leads and CC lists (user request).
+//     WHAT: * buildReminders() gets tracker.resendPolicy (once / daily / everyRun).
+//           * composeReminder() gets ctx.cc = tracker.ccReminders (plain emails).
+//           * the lead summary gets coLeads (extra To) and cc = tracker.ccSummary.
+//     NOTE: sends are still recorded in the sent log in every resend mode, so
+//           switching a tracker back to "once" does not re-send what was already
+//           sent. In test mode CC is dropped by mailSender.js.
 // ================================================================
 
 import { readFileSync } from 'node:fs';
@@ -206,7 +213,7 @@ async function runTracker({ tracker, cfg, files, sender, sentLog, sharedMap, dir
   const resolver = new RecipientResolver(directory, [sharedMap, people.map]);
   const plan = buildReminders({
     items: read.items, today, trackerId: logId, registeredOn: tracker.registeredOn,
-    backlogPolicy: tracker.backlogPolicy, resolver, sentLog,
+    backlogPolicy: tracker.backlogPolicy, resendPolicy: tracker.resendPolicy, resolver, sentLog,
   });
 
   const results = [];
@@ -215,6 +222,7 @@ async function runTracker({ tracker, cfg, files, sender, sentLog, sharedMap, dir
       const mail = composeReminder(recipient, {
         workbookName, today, senderMode: tracker.senderMode, lead: tracker.lead,
         onBehalfOf: tracker.onBehalfOf, includeLogo: true,
+        cc: (tracker.ccReminders || []).map((email) => ({ email })),
       });
       await sender.send(mail, testRecipient);
       results.push({ recipient, ok: true });
@@ -230,7 +238,8 @@ async function runTracker({ tracker, cfg, files, sender, sentLog, sharedMap, dir
   }
 
   const summaryInput = {
-    trackerName: tracker.name, workbookName, today, lead: tracker.lead, results,
+    trackerName: tracker.name, workbookName, today, lead: tracker.lead,
+    coLeads: tracker.coLeads || [], cc: tracker.ccSummary || [], results,
     unmatched: plan.unmatched, backlog: plan.backlog, alreadySentCount: plan.alreadySentCount,
     warnings: [...read.warnings, ...people.warnings], errors, testMode, includeLogo: true,
   };

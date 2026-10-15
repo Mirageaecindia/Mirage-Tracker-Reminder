@@ -27,6 +27,13 @@
 //     * The shared mailbox keeps a copy in its Sent Items (saveToSentItems).
 //     * Permission: the job app may ONLY send as project-reminders@ (Exchange
 //       RBAC scope, verified 2026-10-13). Any other sender -> Graph 403.
+// - 2026-10-15 : ADDED CC (user request: CC lists on reminders and on the summary).
+//     WHAT: mail.cc (optional) -> ccRecipients. Every CC address gets the same
+//           @mirageaec.com check as To / Reply-To (one bad address blocks the mail).
+//     TEST MODE: CC is DROPPED (not redirected). WHY: a test must never copy real
+//           people; the subject still lists who would have been CC'd.
+//           Known limit: CC delivery cannot be tested in test mode.
+//     Dry run line also shows the CC.
 // ================================================================
 
 import { isAllowedAddress } from '../core/recipientResolver.js';
@@ -50,13 +57,15 @@ export class MailSender {
    */
   async send(mail, testRecipient) {
     let { to, subject, html } = mail;
+    let cc = mail.cc || [];
     if (testRecipient) {
-      subject = `[TEST -> ${to.map((t) => t.email).join(', ')}] ${subject}`;
+      subject = `[TEST -> ${to.map((t) => t.email).join(', ')}${cc.length ? ` | CC ${cc.map((c) => c.email).join(', ')}` : ''}] ${subject}`;
       to = [{ name: 'Tracker Reminder test', email: testRecipient }];
+      cc = []; // never copy real people in a test (see change log)
     }
 
     if (to.length === 0) throw new Error('Email has no recipient.');
-    for (const r of [...to, ...mail.replyTo]) {
+    for (const r of [...to, ...cc, ...mail.replyTo]) {
       if (!isAllowedAddress(r.email)) throw new Error(`Blocked: "${r.email}" is not a @mirageaec.com address.`);
     }
 
@@ -81,6 +90,7 @@ export class MailSender {
         subject,
         body: { contentType: 'HTML', content: html },
         toRecipients: to.map(asRecipient),
+        ...(cc.length ? { ccRecipients: cc.map(asRecipient) } : {}),
         ...(mail.replyTo.length ? { replyTo: mail.replyTo.map(asRecipient) } : {}),
         ...(attachments.length ? { attachments } : {}),
       },
@@ -93,7 +103,7 @@ export class MailSender {
     }
 
     if (this.opts.dryRun) {
-      this.log(`   [dry run] would send: ${subject}  ->  ${to.map((t) => t.email).join(', ')}`);
+      this.log(`   [dry run] would send: ${subject}  ->  ${to.map((t) => t.email).join(', ')}${cc.length ? `  (CC ${cc.map((c) => c.email).join(', ')})` : ''}`);
       return;
     }
     await this.graph.postJson(`users/${encodeURIComponent(this.opts.senderMailbox)}/sendMail`, payload);

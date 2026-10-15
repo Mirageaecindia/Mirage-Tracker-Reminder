@@ -33,6 +33,12 @@
 //       only writes the <img> and says which attachment is needed.
 //     * Last line of defence: every To / Reply-To must be @mirageaec.com,
 //       otherwise compose throws (the sender checks again).
+// - 2026-10-15 : ADDED optional CC (user request: per-tracker "CC on reminders" list).
+//     WHY : leads want a copy of every reminder (e.g. a manager) without being the To.
+//     WHAT: ctx.cc (array of {name?, email}) -> mail.cc; the CC addresses go through
+//           the same company-address check as To / Reply-To. No ctx.cc -> cc is [],
+//           so every existing caller behaves as before. mailSender.js sends it and
+//           drops it in test mode.
 // ================================================================
 
 import * as H from './htmlBuilder.js';
@@ -57,8 +63,9 @@ const HEADERS = ['#', 'Drawing No.', 'Drawing Name', 'Sub-group', 'Due', 'Status
  * @param {string} ctx.senderMode                SenderMode
  * @param {{name: string, email: string}} ctx.lead        tracker lead (Default Reply-To)
  * @param {{name: string, email: string}} [ctx.onBehalfOf] person for On-behalf mode
+ * @param {{name?: string, email: string}[]} [ctx.cc]  CC list (see change log 2026-10-15)
  * @param {boolean} [ctx.includeLogo]
- * @returns {{to: object[], replyTo: object[], subject: string, html: string, inlineImages: object[]}}
+ * @returns {{to: object[], cc: object[], replyTo: object[], subject: string, html: string, inlineImages: object[]}}
  */
 export function composeReminder(recipient, ctx) {
   const due = recipient.entries.filter((e) => e.type === ReminderType.Due).map((e) => e.item);
@@ -68,6 +75,7 @@ export function composeReminder(recipient, ctx) {
 
   const mail = {
     to: [{ name, email: recipient.email }],
+    cc: (ctx.cc || []).map((c) => ({ name: c.name, email: c.email })),
     replyTo: contact ? [{ name: contact.name, email: contact.email }] : [],
     subject: subjectFor(recipient.sheetName, due.length, overdue.length, ctx.workbookName),
     html: '',
@@ -138,9 +146,9 @@ function appendTable(html, items, today) {
   H.table(html, HEADERS, rows, (index) => items[index].isOverdue(today));
 }
 
-/** Throws if any To / Reply-To is outside the company (see change log). */
+/** Throws if any To / CC / Reply-To is outside the company (see change log). */
 function ensureCompanyAddresses(mail) {
-  for (const r of [...mail.to, ...mail.replyTo]) {
+  for (const r of [...mail.to, ...mail.cc, ...mail.replyTo]) {
     if (!isAllowedAddress(r.email)) throw new Error(`Blocked: "${r.email}" is not a company address.`);
   }
 }

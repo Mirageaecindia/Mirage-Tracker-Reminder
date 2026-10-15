@@ -25,6 +25,16 @@
 //     * registeredOn = today (India) for a new tracker; kept when editing
 //       (the overdue-backlog rule depends on it).
 //     * Delete needs a second click ("Click again to delete").
+// - 2026-10-15 : ADDED co-leads, CC lists and the resend radio (user request).
+//     WHAT: * Co-leads (max 3): pick from the directory, shown as a list with Remove.
+//             They also get the nightly summary; replies still go to the main lead.
+//             (PersonPicker cannot be cleared, so "pick then list" is used instead
+//             of three fixed pickers.)
+//           * CC on reminders / CC on summary: plain text, emails separated by
+//             comma, semicolon or space. Parsed by parseEmails(); an address outside
+//             @mirageaec.com is stopped by validateTracker() ("Fix before saving").
+//           * Resend radio: once / daily / every run (ResendPolicy).
+//     NOTE: CC is not sent in test mode (mailSender.js).
 // ================================================================
 
 import { useEffect, useMemo, useState } from 'react';
@@ -38,8 +48,8 @@ import PersonPicker from '../components/PersonPicker.jsx';
 import { resolveTrackerLink } from '../services/trackerLinks.js';
 import { loadWorkbookLayouts } from '../services/trackerReading.js';
 import { ALL_ROLES, roleKey, roleShortName } from '../../../core/roles.js';
-import { validateTracker, withDefaults } from '../../../core/trackerConfig.js';
-import { BacklogPolicy } from '../../../core/recipientBuilder.js';
+import { MAX_CO_LEADS, validateTracker, withDefaults } from '../../../core/trackerConfig.js';
+import { BacklogPolicy, ResendPolicy } from '../../../core/recipientBuilder.js';
 import { SenderMode } from '../../../core/emailComposer.js';
 import { DEFAULT_SEND_TIME, indiaNow, sendTimeLabel } from '../../../core/schedule.js';
 
@@ -51,6 +61,17 @@ const BACKLOG_TEXT = {
   [BacklogPolicy.EmailOnce]: 'Email those old overdue drawings once, like any other overdue drawing',
   [BacklogPolicy.LeadSummaryOnly]: 'List those old overdue drawings in the lead\'s summary only - do not email people',
 };
+
+const RESEND_TEXT = {
+  [ResendPolicy.Once]: 'Send each item to each person ONCE only - never remind the same person again about the same overdue drawing (recommended)',
+  [ResendPolicy.Daily]: 'Resend every day until the drawing is done (a manual re-run the same day does not send again)',
+  [ResendPolicy.EveryRun]: 'Resend on every run until the drawing is done (a manual re-run sends again)',
+};
+
+/** "a@x.com, b@x.com; c@x.com" -> ["a@x.com","b@x.com","c@x.com"] (blank-safe, no duplicates). */
+function parseEmails(text) {
+  return [...new Set(String(text || '').split(/[\s,;]+/).map((e) => e.trim()).filter(Boolean))];
+}
 
 /**
  * @param {{ graph: object, directory: object[], me: {name: string, email: string},
@@ -75,6 +96,10 @@ export default function TrackerEditor({ graph, directory, me, trackers, editing,
   const [senderMode, setSenderMode] = useState(start ? start.senderMode : SenderMode.Default);
   const [onBehalfOf, setOnBehalfOf] = useState(start ? start.onBehalfOf : null);
   const [backlogPolicy, setBacklogPolicy] = useState(start ? start.backlogPolicy : BacklogPolicy.AfterRegistration);
+  const [resendPolicy, setResendPolicy] = useState(start ? start.resendPolicy : ResendPolicy.Once);
+  const [coLeads, setCoLeads] = useState(start ? start.coLeads : []);
+  const [ccReminders, setCcReminders] = useState(start ? start.ccReminders.join(', ') : '');
+  const [ccSummary, setCcSummary] = useState(start ? start.ccSummary.join(', ') : '');
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Editing: read the workbook straight away so the column lists are available.
@@ -131,11 +156,15 @@ export default function TrackerEditor({ graph, directory, me, trackers, editing,
       senderMode,
       onBehalfOf: senderMode === SenderMode.OnBehalf ? onBehalfOf : null,
       backlogPolicy,
+      resendPolicy,
+      coLeads,
+      ccReminders: parseEmails(ccReminders),
+      ccSummary: parseEmails(ccSummary),
       registeredOn: start ? start.registeredOn : indiaNow().date,
       sendTime,
       sheets,
     };
-  }, [loc, choices, name, lead, sendTime, testMode, testRecipient, senderMode, onBehalfOf, backlogPolicy, start, trackers]);
+  }, [loc, choices, name, lead, sendTime, testMode, testRecipient, senderMode, onBehalfOf, backlogPolicy, resendPolicy, coLeads, ccReminders, ccSummary, start, trackers]);
 
   const problems = tracker ? validateTracker(withDefaults(tracker)) : [];
 
@@ -185,6 +214,31 @@ export default function TrackerEditor({ graph, directory, me, trackers, editing,
           </Field>
           <Field label="Lead (gets the nightly summary; replies go to them)">
             <PersonPicker directory={directory} value={lead} onChange={setLead} />
+          </Field>
+          <Field label={`Extra leads (max ${MAX_CO_LEADS}) - also get the nightly summary; replies still go to the lead`}>
+            <div style={{ display: 'grid', gap: 6 }}>
+              {coLeads.map((c) => (
+                <div key={c.email} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Text>{c.name} &lt;{c.email}&gt;</Text>
+                  <Button size="small" onClick={() => setCoLeads(coLeads.filter((x) => x.email !== c.email))}>Remove</Button>
+                </div>
+              ))}
+              {coLeads.length < MAX_CO_LEADS && (
+                <PersonPicker directory={directory} value={null} placeholder="Add an extra lead - type a name..."
+                  onChange={(p) => { if (p && !coLeads.some((x) => x.email === p.email)) setCoLeads([...coLeads, p]); }} />
+              )}
+            </div>
+          </Field>
+          <Field label="Resend (people who were already reminded)">
+            <RadioGroup value={resendPolicy} onChange={(_, d) => setResendPolicy(d.value)}>
+              {Object.values(ResendPolicy).map((p) => <Radio key={p} value={p} label={RESEND_TEXT[p]} />)}
+            </RadioGroup>
+          </Field>
+          <Field label="CC on every reminder email (emails separated by comma)">
+            <Input value={ccReminders} onChange={(_, d) => setCcReminders(d.value)} placeholder="name@mirageaec.com, other@mirageaec.com" />
+          </Field>
+          <Field label="CC on the nightly summary (emails separated by comma)">
+            <Input value={ccSummary} onChange={(_, d) => setCcSummary(d.value)} placeholder="name@mirageaec.com" />
           </Field>
           <Field label="Send time (India time)">
             <Dropdown value={sendTimeLabel(sendTime)} selectedOptions={[sendTime]}

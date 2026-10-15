@@ -31,6 +31,19 @@
 //         - "overdue" entries after 365 days. WHY: they are what stops a
 //           second overdue email; dropping them early would re-send. After a
 //           year the item is either done or long abandoned (known limit).
+// - 2026-10-15 : ADDED wasSentOn() and "re-record refreshes sentAt" (user request:
+//       per-tracker resend option, see recipientBuilder.js ResendPolicy).
+//     WHY : resend policy "daily" must know whether an item already went out
+//           TODAY (India date), so a manual same-day re-run does not duplicate.
+//     WHAT: * index is now a Map (key -> entry) instead of a Set, to find the
+//             entry's sentAt without scanning the whole list.
+//           * wasSentOn(..., istDate): true if the entry exists AND its sentAt
+//             falls on that India date (sentAt is UTC; +05:30 applied here).
+//           * record(): an existing key now gets its sentAt refreshed instead of
+//             being ignored. Old behaviour is unchanged for "once" trackers
+//             (they never re-record a key they skipped).
+//     NOTE: refreshing sentAt also restarts the prune clock - a resent item stays
+//           in the log while it keeps being sent, which is what we want.
 // ================================================================
 
 export const ReminderType = Object.freeze({
@@ -44,7 +57,7 @@ export class SentLog {
   /** @param {{version?: number, entries?: object[]}} [data]  parsed sentlog.json (missing/corrupt -> empty) */
   constructor(data) {
     this.entries = Array.isArray(data && data.entries) ? data.entries.filter(isValidEntry) : [];
-    this.index = new Set(this.entries.map((e) => indexKey(e.trackerId, e.itemKey, e.type, e.email)));
+    this.index = new Map(this.entries.map((e) => [indexKey(e.trackerId, e.itemKey, e.type, e.email), e]));
   }
 
   /** True if this reminder already went to this address. */
@@ -52,13 +65,24 @@ export class SentLog {
     return this.index.has(indexKey(trackerId, itemKey, type, email));
   }
 
-  /** Records one email's items (call only AFTER the email was accepted by Graph). */
+  /** True if this reminder went to this address on the given India date "YYYY-MM-DD" (see change log 2026-10-15). */
+  wasSentOn(trackerId, itemKey, type, email, istDate) {
+    const entry = this.index.get(indexKey(trackerId, itemKey, type, email));
+    return Boolean(entry) && istDateOf(entry.sentAt) === istDate;
+  }
+
+  /** Records one email's items (call only AFTER the email was accepted by Graph). An existing record gets its sentAt refreshed. */
   record(trackerId, itemKeys, type, email, sentAtIso) {
     for (const itemKey of itemKeys) {
       const key = indexKey(trackerId, itemKey, type, email);
-      if (this.index.has(key)) continue;
-      this.index.add(key);
-      this.entries.push({ trackerId, itemKey, type, email: email.trim(), sentAt: sentAtIso });
+      const existing = this.index.get(key);
+      if (existing) {
+        existing.sentAt = sentAtIso;
+        continue;
+      }
+      const entry = { trackerId, itemKey, type, email: email.trim(), sentAt: sentAtIso };
+      this.index.set(key, entry);
+      this.entries.push(entry);
     }
   }
 
@@ -70,7 +94,7 @@ export class SentLog {
       const keepDays = KEEP_DAYS[e.type] ?? KEEP_DAYS.overdue;
       return now - Date.parse(e.sentAt) <= keepDays * 86400000;
     });
-    this.index = new Set(this.entries.map((e) => indexKey(e.trackerId, e.itemKey, e.type, e.email)));
+    this.index = new Map(this.entries.map((e) => [indexKey(e.trackerId, e.itemKey, e.type, e.email), e]));
     return before - this.entries.length;
   }
 
@@ -78,6 +102,13 @@ export class SentLog {
   toJSON() {
     return { version: 1, entries: this.entries };
   }
+}
+
+const IST_OFFSET_MS = 330 * 60000; // India = UTC+05:30
+
+/** UTC ISO timestamp -> India date "YYYY-MM-DD". */
+function istDateOf(iso) {
+  return new Date(Date.parse(iso) + IST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 function indexKey(trackerId, itemKey, type, email) {

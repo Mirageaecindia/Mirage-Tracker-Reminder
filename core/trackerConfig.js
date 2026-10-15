@@ -24,6 +24,10 @@
 //       "senderMode": "default" | "onBehalf",
 //       "onBehalfOf": { "name": "...", "email": "..." } | null,
 //       "backlogPolicy": "afterRegistration" | "emailOnce" | "leadSummaryOnly",
+//       "resendPolicy": "once" | "daily" | "everyRun",   // default "once"
+//       "coLeads": [ { "name": "...", "email": "...@mirageaec.com" } ],   // max 3, also get the summary
+//       "ccReminders": [ "a@mirageaec.com" ],   // CC on every reminder email
+//       "ccSummary": [ "b@mirageaec.com" ],     // CC on the lead summary
 //       "registeredOn": "2026-10-14",
 //       "sendTime": "20:00",                     // India time, HH:00 or HH:30
 //       "sheets": [ { "name": "F-14",
@@ -50,17 +54,27 @@
 //       IST, default 8 PM, 30-minute steps). Missing -> "20:00"; anything
 //       other than HH:00 / HH:30 is a validation problem (see schedule.js
 //       for why only half hours).
+// - 2026-10-15 : ADDED resendPolicy, coLeads, ccReminders, ccSummary (user request).
+//     WHY : leads wanted (1) more than one lead on the summary, (2) CC lists for
+//           reminders and for the summary, (3) a choice between "send once" and
+//           "keep resending until fixed".
+//     WHAT: new optional fields with safe defaults (once / [] / [] / []), so a
+//           trackers.json saved before this change loads and behaves as before.
+//           Validation: coLeads max 3 and company addresses only; CC lists
+//           company addresses only (same rule as To / Reply-To); resendPolicy
+//           must be one of ResendPolicy. Test mode: CC is dropped by mailSender.js.
 // ================================================================
 
 import { roleFromName } from './roles.js';
 import { SheetSetup } from './assignmentItem.js';
 import { isAllowedAddress } from './recipientResolver.js';
-import { BacklogPolicy } from './recipientBuilder.js';
+import { BacklogPolicy, ResendPolicy } from './recipientBuilder.js';
 import { SenderMode } from './emailComposer.js';
 import { DEFAULT_SEND_TIME, SEND_TIME } from './schedule.js';
 
 const ID = /^[a-z0-9][a-z0-9-]{1,40}$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+export const MAX_CO_LEADS = 3;
 
 /**
  * Parsed trackers.json -> valid trackers + problems.
@@ -92,6 +106,10 @@ export function withDefaults(raw) {
   t.senderMode = t.senderMode || SenderMode.Default;
   t.backlogPolicy = t.backlogPolicy || BacklogPolicy.AfterRegistration;
   t.onBehalfOf = t.onBehalfOf || null;
+  t.resendPolicy = t.resendPolicy || ResendPolicy.Once;
+  t.coLeads = Array.isArray(t.coLeads) ? t.coLeads : [];
+  t.ccReminders = Array.isArray(t.ccReminders) ? t.ccReminders : [];
+  t.ccSummary = Array.isArray(t.ccSummary) ? t.ccSummary : [];
   t.sendTime = t.sendTime || DEFAULT_SEND_TIME;
   t.sheets = Array.isArray(t.sheets) ? t.sheets : [];
   return t;
@@ -112,6 +130,11 @@ export function validateTracker(t) {
     p.push('onBehalfOf.email must be a @mirageaec.com address in On-behalf mode');
   }
   if (!Object.values(BacklogPolicy).includes(t.backlogPolicy)) p.push(`backlogPolicy must be ${Object.values(BacklogPolicy).join(' / ')}`);
+  if (!Object.values(ResendPolicy).includes(t.resendPolicy)) p.push(`resendPolicy must be ${Object.values(ResendPolicy).join(' / ')}`);
+  if (t.coLeads.length > MAX_CO_LEADS) p.push(`at most ${MAX_CO_LEADS} co-leads`);
+  t.coLeads.forEach((c) => { if (!c || !isAllowedAddress(c.email)) p.push(`co-lead "${c && c.email}" must be a @mirageaec.com address`); });
+  t.ccReminders.forEach((e) => { if (!isAllowedAddress(e)) p.push(`CC (reminders) "${e}" must be a @mirageaec.com address`); });
+  t.ccSummary.forEach((e) => { if (!isAllowedAddress(e)) p.push(`CC (summary) "${e}" must be a @mirageaec.com address`); });
   if (!ISO_DATE.test(t.registeredOn || '')) p.push('registeredOn must be YYYY-MM-DD');
   if (!SEND_TIME.test(t.sendTime || '')) p.push('sendTime must be HH:00 or HH:30 (India time, e.g. "20:00")');
   if (t.sheets.length === 0) p.push('no sheets configured');

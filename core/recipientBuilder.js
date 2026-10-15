@@ -33,6 +33,18 @@
 //       the nightly rule above; unmatched rows go to the lead summary.
 //     * Roles: only the roles the lead ticked for each sheet are read in the
 //       first place (trackerReader + SheetSetup), so no role filter here.
+// - 2026-10-15 : ADDED resendPolicy (user request: per-tracker radio on the admin page).
+//     WHY : until now an item was emailed to a person ONCE (sent-log check) - a lead
+//           who wants reminders to keep coming until the drawing is done had no way.
+//     WHAT: new ResendPolicy + parameter resendPolicy of buildReminders():
+//           once     : old behaviour - skip if already in the sent log (default, so
+//                      trackers saved before this change behave exactly as before)
+//           daily    : resend every day, but skip what was already sent TODAY
+//                      (a manual same-day re-run never duplicates) - uses
+//                      sentLog.wasSentOn() (added in sentLog.js)
+//           everyRun : resend on every run, no check at all (a manual re-run sends again)
+//     NOTE: the alreadySentCount in the summary only counts skipped items, so it is
+//           0 in everyRun mode by design.
 // ================================================================
 
 import { ReminderType } from './sentLog.js';
@@ -43,6 +55,13 @@ export const BacklogPolicy = Object.freeze({
   LeadSummaryOnly: 'leadSummaryOnly',
 });
 
+/** Per-tracker choice: how often the same item may be emailed to the same person (see change log 2026-10-15). */
+export const ResendPolicy = Object.freeze({
+  Once: 'once',
+  Daily: 'daily',
+  EveryRun: 'everyRun',
+});
+
 /**
  * @param {object} args
  * @param {import('./assignmentItem.js').AssignmentItem[]} args.items
@@ -50,11 +69,13 @@ export const BacklogPolicy = Object.freeze({
  * @param {string} args.trackerId
  * @param {string} args.registeredOn   "YYYY-MM-DD" the tracker was registered
  * @param {string} [args.backlogPolicy]
+ * @param {string} [args.resendPolicy]  ResendPolicy; missing/unknown -> once (old behaviour)
  * @param {import('./recipientResolver.js').RecipientResolver} args.resolver
  * @param {import('./sentLog.js').SentLog} args.sentLog
  */
-export function buildReminders({ items, today, trackerId, registeredOn, backlogPolicy, resolver, sentLog }) {
+export function buildReminders({ items, today, trackerId, registeredOn, backlogPolicy, resendPolicy, resolver, sentLog }) {
   const policy = Object.values(BacklogPolicy).includes(backlogPolicy) ? backlogPolicy : BacklogPolicy.AfterRegistration;
+  const resend = Object.values(ResendPolicy).includes(resendPolicy) ? resendPolicy : ResendPolicy.Once;
   const result = {
     /** emails to send */
     recipients: [],
@@ -114,7 +135,7 @@ export function buildReminders({ items, today, trackerId, registeredOn, backlogP
     if (!row.names.some((n) => n.toLowerCase() === spelling.toLowerCase())) row.names.push(spelling);
 
     for (const c of group) {
-      if (sentLog.wasSent(trackerId, c.item.key, c.type, user.email)) result.alreadySentCount++;
+      if (alreadySent(sentLog, resend, trackerId, c, user.email, today)) result.alreadySentCount++;
       else row.entries.push(c);
     }
   }
@@ -128,6 +149,13 @@ export function buildReminders({ items, today, trackerId, registeredOn, backlogP
   result.recipients.sort((a, b) => a.sheetName.localeCompare(b.sheetName) || a.names.join(', ').localeCompare(b.names.join(', ')));
   result.unmatched.sort((a, b) => a.sheetName.localeCompare(b.sheetName) || a.name.localeCompare(b.name));
   return result;
+}
+
+/** True = skip this item for this person, according to the tracker's resend policy (see change log 2026-10-15). */
+function alreadySent(sentLog, resend, trackerId, entry, email, today) {
+  if (resend === ResendPolicy.EveryRun) return false;
+  if (resend === ResendPolicy.Daily) return sentLog.wasSentOn(trackerId, entry.item.key, entry.type, email, today);
+  return sentLog.wasSent(trackerId, entry.item.key, entry.type, email);
 }
 
 /** "due" / "overdue" / null for one item (see NIGHTLY RULE). */

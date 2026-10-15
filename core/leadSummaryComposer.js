@@ -18,6 +18,16 @@
 //       caller via shouldSend()).
 //     * TEST MODE banner at the top when the job is in test mode, so a test
 //       summary can never be mistaken for a real one.
+// - 2026-10-15 : ADDED co-leads and CC (user request).
+//     WHY : a tracker can have more than one lead, and managers want the summary
+//           in copy without being a lead.
+//     WHAT: s.coLeads -> extra To addresses (all get the summary; Reply-To stays
+//           empty as before); s.cc -> CC addresses (plain emails). Both optional,
+//           so old callers are unchanged. All go through the company-address check.
+//           In test mode mailSender.js replaces To by the test address and drops CC.
+//     ALSO: the label "Overdue items reminded (once)" is now "Overdue items reminded"
+//           - with the resend option an overdue item is no longer reminded only once,
+//           so "(once)" would be wrong.
 // ================================================================
 
 import * as H from './htmlBuilder.js';
@@ -32,6 +42,8 @@ import { LOGO } from './emailComposer.js';
  * @param {string} s.workbookName
  * @param {string} s.today                         "YYYY-MM-DD"
  * @param {{name: string, email: string}} s.lead
+ * @param {{name: string, email: string}[]} [s.coLeads]  extra leads, also get the summary
+ * @param {string[]} [s.cc]                              CC addresses (see change log 2026-10-15)
  * @param {{recipient: object, ok: boolean, error?: string}[]} s.results   one per reminder email
  * @param {object[]} s.unmatched                   from recipientBuilder
  * @param {object[]} s.backlog                     AssignmentItems (leadSummaryOnly)
@@ -43,6 +55,11 @@ import { LOGO } from './emailComposer.js';
  */
 export function composeLeadSummary(s) {
   if (!isAllowedAddress(s.lead.email)) throw new Error(`Blocked: lead "${s.lead.email}" is not a company address.`);
+  const coLeads = s.coLeads || [];
+  const cc = (s.cc || []).map((email) => ({ email }));
+  for (const r of [...coLeads, ...cc]) {
+    if (!isAllowedAddress(r.email)) throw new Error(`Blocked: "${r.email}" is not a company address.`);
+  }
 
   const sent = s.results.filter((r) => r.ok);
   const failed = s.results.filter((r) => !r.ok);
@@ -64,7 +81,7 @@ export function composeLeadSummary(s) {
     ['Emails sent', String(sent.length)],
     ['Emails failed', String(failed.length)],
     ['Due-today items reminded', String(count(sent, ReminderType.Due))],
-    ['Overdue items reminded (once)', String(count(sent, ReminderType.Overdue))],
+    ['Overdue items reminded', String(count(sent, ReminderType.Overdue))],
     ['Already reminded before (skipped)', String(s.alreadySentCount)],
     ['Names not matched', String(s.unmatched.length)],
     ['Cell warnings', String(s.warnings.length)],
@@ -111,7 +128,8 @@ export function composeLeadSummary(s) {
   }
 
   return {
-    to: [{ name: s.lead.name, email: s.lead.email }],
+    to: [{ name: s.lead.name, email: s.lead.email }, ...coLeads.map((c) => ({ name: c.name, email: c.email }))],
+    cc,
     replyTo: [],
     subject: `${s.testMode ? '[TEST] ' : ''}Tracker reminders - ${s.trackerName} - ${H.date(s.today, '')} - `
       + `${sent.length} sent${failed.length ? `, ${failed.length} failed` : ''}${s.unmatched.length ? `, ${s.unmatched.length} not matched` : ''}`,

@@ -19,12 +19,19 @@
 //     * date() takes "YYYY-MM-DD" strings (see dateCellParser.js) and prints
 //       dd-MM-yyyy, the C# DateFormat.
 //     * Same colours as C#: blue header #1e5aaa, overdue rows red #fdecea.
+// - 2026-10-15 : Headings and table header bars blue -> red (#c00000).
+//     * WHY: user request (demo day) - red headings instead of blue.
+//     * WHAT: new constant HEADING_RED used by HEAD_CELL (table header
+//       background) and heading() (h3 text colour). Nothing else changed.
+//     * NOTE: this NO LONGER matches Excel_Notify HtmlBuilder.cs, which
+//       still uses blue #1e5aaa. Parity check output may differ in colour.
 // ================================================================
 
 export const DATE_FORMAT = 'dd-MM-yyyy';
 
+const HEADING_RED = '#c00000'; // was blue #1e5aaa (see change log 2026-10-15)
 const CELL = 'border:1px solid #c8c8c8;padding:4px 8px;';
-const HEAD_CELL = CELL + 'background:#1e5aaa;color:#ffffff;text-align:left;';
+const HEAD_CELL = CELL + `background:${HEADING_RED};color:#ffffff;text-align:left;`;
 const LABEL_CELL = CELL + 'background:#eef3fa;font-weight:bold;';
 const HIGHLIGHT_CELL = 'background:#fdecea;color:#b00020;'; // overdue rows
 
@@ -52,7 +59,7 @@ export function paragraph(html, text) {
 }
 
 export function heading(html, text) {
-  html.push(`<h3 style="font-size:15px;margin:16px 0 6px 0;color:#1e5aaa;">${encode(text)}</h3>`);
+  html.push(`<h3 style="font-size:15px;margin:16px 0 6px 0;color:${HEADING_RED};">${encode(text)}</h3>`);
 }
 
 /** Smaller heading (discipline under a role heading). */
